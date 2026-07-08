@@ -118,6 +118,10 @@ asset, B20 stablecoin, and PolicyRegistry) already active, matching a live
 Beryl-or-later chain, so you do not need to `activate()` anything by hand. Its
 chain id is `31337` and it ships the usual anvil pre-funded dev accounts.
 
+The node can also boot with a ready-made market (test tokens, seeded AMM
+pools, price feeds) already deployed via `base-anvil --preset trading`; see
+[Build a trading app on Base locally](./trading.md).
+
 Networks that already have the precompiles active, for testing against a remote
 chain:
 
@@ -137,6 +141,9 @@ chain:
 
 ## Next steps
 
+- **Build a trading app locally:** [`docs/trading.md`](./trading.md) boots a
+  local market (tokens, AMM pools, price feeds) with
+  `base-anvil --preset trading` and walks through your first swap.
 - **Launch a B20 token end to end:** the Base docs walkthrough at
   [docs.base.org/get-started/launch-b20-token](https://docs.base.org/get-started/launch-b20-token)
   creates a token, mints supply, and verifies the balance using these commands.

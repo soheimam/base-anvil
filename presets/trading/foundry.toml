@@ -1,0 +1,12 @@
+[profile.default]
+src = "src"
+script = "script"
+test = "test"
+out = "out"
+libs = []
+# Dependency-free by design (same convention as smoke/): no forge-std, no
+# submodules, no network. The script and test vendor the tiny Vm interfaces
+# they need.
+
+# The test reads the generated addresses.json (relative to this project root).
+fs_permissions = [{ access = "read", path = "./addresses.json" }]

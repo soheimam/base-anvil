@@ -168,6 +168,22 @@ pub struct NodeArgs {
     )]
     pub load_state: Option<SerializableState>,
 
+    /// Initialize the chain from a named Base preset state snapshot.
+    ///
+    /// This is sugar for `--base --load-state <PATH>`, where the state file is resolved, in
+    /// order, from `$BASE_ANVIL_PRESETS_DIR/<NAME>/state.json`, `./presets/<NAME>/state.json`
+    /// and `~/.foundry/presets/<NAME>/state.json`.
+    #[arg(
+        long,
+        value_name = "NAME",
+        conflicts_with_all = &[
+            "init",
+            "state",
+            "load_state"
+        ]
+    )]
+    pub preset: Option<String>,
+
     #[arg(long, help = IPC_HELP, value_name = "PATH", visible_alias = "ipcpath")]
     pub ipc: Option<Option<String>>,
 
@@ -211,7 +227,21 @@ const IPC_HELP: &str = "Launch an ipc server at the given path or default path =
 const DEFAULT_DUMP_INTERVAL: Duration = Duration::from_secs(60);
 
 impl NodeArgs {
-    pub fn into_node_config(self) -> eyre::Result<NodeConfig> {
+    pub fn into_node_config(mut self) -> eyre::Result<NodeConfig> {
+        if let Some(fork_url) = &mut self.evm.fork_url
+            && let Some(resolved) = resolve_fork_url_alias(&fork_url.url)
+        {
+            sh_println!("Resolved fork-url alias `{}` to {resolved}", fork_url.url)?;
+            fork_url.url = resolved.to_string();
+        }
+
+        // `--preset <name>` is sugar for `--base --load-state <resolved-path>`.
+        let preset_state = self.preset.as_deref().map(load_preset_state).transpose()?;
+        let mut networks = self.evm.networks;
+        if self.preset.is_some() {
+            networks = networks.enable_base();
+        }
+
         let genesis_balance = Unit::ETHER.wei().saturating_mul(U256::from(self.balance));
         let compute_units_per_second =
             if self.evm.no_rate_limit { Some(u64::MAX) } else { self.evm.compute_units_per_second };
@@ -275,10 +305,12 @@ impl NodeArgs {
             .with_code_size_limit(self.evm.code_size_limit)
             .disable_code_size_limit(self.evm.disable_code_size_limit)
             .set_pruned_history(self.prune_history)
-            .with_init_state(self.load_state.or_else(|| self.state.and_then(|s| s.state)))
+            .with_init_state(
+                preset_state.or(self.load_state).or_else(|| self.state.and_then(|s| s.state)),
+            )
             .with_transaction_block_keeper(self.transaction_block_keeper)
             .with_max_persisted_states(self.max_persisted_states)
-            .with_networks(self.evm.networks)
+            .with_networks(networks)
             .with_disable_default_create2_deployer(self.evm.disable_default_create2_deployer)
             .with_disable_pool_balance_checks(self.evm.disable_pool_balance_checks)
             .with_slots_in_an_epoch(self.slots_in_an_epoch)
@@ -411,6 +443,9 @@ pub struct AnvilEvmArgs {
     /// Fetch state over a remote endpoint instead of starting from an empty state.
     ///
     /// If you want to fetch state from a specific block number, add a block number like `http://localhost:8545@1400000` or use the `--fork-block-number` argument.
+    ///
+    /// The aliases `base` and `base-sepolia` (case-insensitive) resolve to the public Base RPC
+    /// endpoints `https://mainnet.base.org` and `https://sepolia.base.org`.
     #[arg(
         long,
         short,
@@ -782,6 +817,54 @@ impl FromStr for ForkUrl {
     }
 }
 
+/// Well-known `--fork-url` aliases for Base networks.
+const FORK_URL_ALIASES: &[(&str, &str)] =
+    &[("base", "https://mainnet.base.org"), ("base-sepolia", "https://sepolia.base.org")];
+
+/// Resolves a well-known fork-url alias, e.g. `base` or `base-sepolia`, to its public RPC
+/// endpoint.
+///
+/// Aliases are matched case-insensitively. Returns `None` if the value is not a known alias.
+fn resolve_fork_url_alias(url: &str) -> Option<&'static str> {
+    FORK_URL_ALIASES
+        .iter()
+        .find_map(|(alias, endpoint)| alias.eq_ignore_ascii_case(url).then_some(*endpoint))
+}
+
+/// Returns the candidate locations of a preset's `state.json`, in resolution order:
+/// `$BASE_ANVIL_PRESETS_DIR/<name>/state.json` (if the env var is set), then
+/// `./presets/<name>/state.json` relative to the current directory, then
+/// `~/.foundry/presets/<name>/state.json`.
+fn preset_state_candidates(name: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::with_capacity(3);
+    if let Some(dir) = std::env::var_os("BASE_ANVIL_PRESETS_DIR") {
+        candidates.push(PathBuf::from(dir).join(name).join("state.json"));
+    }
+    candidates.push(PathBuf::from("presets").join(name).join("state.json"));
+    if let Some(foundry_dir) = Config::foundry_dir() {
+        candidates.push(foundry_dir.join("presets").join(name).join("state.json"));
+    }
+    candidates
+}
+
+/// Resolves the state file for `--preset <name>` and loads it.
+fn load_preset_state(name: &str) -> eyre::Result<SerializableState> {
+    let candidates = preset_state_candidates(name);
+    let Some(path) = candidates.iter().find(|path| path.exists()) else {
+        let tried =
+            candidates.iter().map(|path| format!("  - {}", path.display())).collect::<Vec<_>>();
+        eyre::bail!(
+            "no state file found for preset `{name}`, tried:\n{}\ngenerate it with presets/{name}/generate.sh or download a preset artifact",
+            tried.join("\n")
+        );
+    };
+    let state = SerializableState::load(path).map_err(|err| {
+        eyre::eyre!("failed to load preset `{name}` from {}: {err}", path.display())
+    })?;
+    sh_println!("Loaded preset `{name}` from {}", path.display())?;
+    Ok(state)
+}
+
 /// Clap's value parser for genesis. Loads a genesis.json file.
 fn read_genesis_file(path: &str) -> Result<Genesis, String> {
     foundry_common::fs::read_json_file(path.as_ref()).map_err(|err| err.to_string())
@@ -935,5 +1018,94 @@ mod tests {
             args.host,
             ["::1", "1.1.1.1", "2.2.2.2"].map(|ip| ip.parse::<IpAddr>().unwrap()).to_vec()
         );
+    }
+
+    #[test]
+    fn can_resolve_fork_url_aliases() {
+        for alias in ["base", "BASE", "Base"] {
+            let args = NodeArgs::parse_from(["anvil", "--fork-url", alias]);
+            let config = args.into_node_config().unwrap();
+            assert_eq!(config.eth_rpc_url.as_deref(), Some("https://mainnet.base.org"));
+        }
+
+        for alias in ["base-sepolia", "BASE-SEPOLIA", "Base-Sepolia"] {
+            let args = NodeArgs::parse_from(["anvil", "--fork-url", alias]);
+            let config = args.into_node_config().unwrap();
+            assert_eq!(config.eth_rpc_url.as_deref(), Some("https://sepolia.base.org"));
+        }
+    }
+
+    #[test]
+    fn can_resolve_fork_url_alias_with_block() {
+        let args = NodeArgs::parse_from(["anvil", "--fork-url", "base@1000000"]);
+        let config = args.into_node_config().unwrap();
+        assert_eq!(config.eth_rpc_url.as_deref(), Some("https://mainnet.base.org"));
+        assert_eq!(config.fork_choice, Some(ForkChoice::Block(1000000)));
+    }
+
+    #[test]
+    fn non_alias_fork_url_passes_through() {
+        for url in ["http://localhost:8545", "https://mainnet.example.org", "base-goerli"] {
+            let args = NodeArgs::parse_from(["anvil", "--fork-url", url]);
+            let config = args.into_node_config().unwrap();
+            assert_eq!(config.eth_rpc_url.as_deref(), Some(url));
+        }
+    }
+
+    #[test]
+    fn can_resolve_preset_state_via_env_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let preset_dir = tmp.path().join("trading");
+        std::fs::create_dir_all(&preset_dir).unwrap();
+        foundry_common::fs::write_json_file(
+            &preset_dir.join("state.json"),
+            &SerializableState::default(),
+        )
+        .unwrap();
+
+        unsafe { env::set_var("BASE_ANVIL_PRESETS_DIR", tmp.path()) };
+
+        // The preset resolves from `$BASE_ANVIL_PRESETS_DIR/<name>/state.json` and behaves like
+        // `--base --load-state <path>`.
+        let args = NodeArgs::parse_from(["anvil", "--preset", "trading"]);
+        let config = args.into_node_config().unwrap();
+        assert!(config.init_state.is_some());
+        assert!(config.networks.is_base());
+
+        // A missing preset errors with the candidate paths and a generation hint.
+        let args = NodeArgs::parse_from(["anvil", "--preset", "missing"]);
+        let err = args.into_node_config().unwrap_err().to_string();
+
+        unsafe { env::remove_var("BASE_ANVIL_PRESETS_DIR") };
+
+        assert!(
+            err.contains(&tmp.path().join("missing").join("state.json").display().to_string()),
+            "{err}"
+        );
+        assert!(
+            err.contains(
+                &Path::new("presets").join("missing").join("state.json").display().to_string()
+            ),
+            "{err}"
+        );
+        assert!(err.contains("presets/missing/generate.sh"), "{err}");
+    }
+
+    #[test]
+    fn preset_conflicts_with_state_flags() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state_path = tmp.path().join("state.json");
+        foundry_common::fs::write_json_file(&state_path, &SerializableState::default()).unwrap();
+        let genesis_path = tmp.path().join("genesis.json");
+        foundry_common::fs::write_json_file(&genesis_path, &Genesis::default()).unwrap();
+
+        let state = state_path.to_str().unwrap();
+        let genesis = genesis_path.to_str().unwrap();
+        for conflicting in [["--load-state", state], ["--state", state], ["--init", genesis]] {
+            let mut cmd = vec!["anvil", "--preset", "trading"];
+            cmd.extend(conflicting);
+            let err = NodeArgs::try_parse_from(cmd).unwrap_err();
+            assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
     }
 }

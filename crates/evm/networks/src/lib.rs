@@ -146,6 +146,12 @@ impl NetworkConfigs {
         Self { base: true, ..Default::default() }
     }
 
+    /// Enables Base network features on an existing config.
+    pub fn enable_base(mut self) -> Self {
+        self.base = true;
+        self
+    }
+
     /// Returns the activation admin address that will be configured on the
     /// ActivationRegistry precompile when `--base` is set. Falls back to the
     /// default Base activation admin when no override is provided.
