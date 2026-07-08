@@ -102,6 +102,8 @@ documentation at [getfoundry.sh](https://getfoundry.sh), and `base-forge --help`
 | --- | --- | --- |
 | `base-forge`, `base-cast`, `base-anvil`, `base-chisel` | all | Wrappers that run the Base build with precompiles enabled by default. Installed by `base-foundryup`. |
 | `--base` flag | `anvil` | Installs the Base precompiles into the node's EVM. The `base-anvil` wrapper passes this for you. |
+| `--preset <name>` flag | `anvil` | Boots the node from a named state snapshot with Base enabled. Sugar for `--base --load-state <path>`; see [Preset snapshots](#preset-snapshots) for resolution and semantics. |
+| `--fork-url base` / `base-sepolia` | `anvil` | Case-insensitive aliases for the public Base RPC endpoints (`https://mainnet.base.org`, `https://sepolia.base.org`). Compose with block pinning (`base@<block>`); a same-named alias in your `foundry.toml` `rpc_endpoints` takes precedence. |
 | `base = true` (in `foundry.toml`) | `forge`, `cast`, `chisel` | Installs the Base precompiles into the in-process EVM. Read from the active profile. |
 | `FOUNDRY_BASE=true` (env) | `forge`, `cast`, `chisel` | Same as `base = true`, set via the environment. |
 | `base-foundryup` | installer | Base-only installer; select a version with `--install <ref>` (e.g. `v1.1.0`, `nightly`). Never touches stock `foundryup`. |
@@ -122,6 +124,25 @@ The node can also boot with a ready-made market (test tokens, seeded AMM
 pools, price feeds) already deployed via `base-anvil --preset trading`; see
 [Build a trading app on Base locally](./trading.md).
 
+### Preset snapshots
+
+`--preset <name>` initializes the chain from a pre-built anvil state snapshot
+and force-enables the Base precompiles, even on a stock `anvil` build. It is
+exactly `--base --load-state <path>`, where the path is resolved in order:
+
+1. `$BASE_ANVIL_PRESETS_DIR/<name>/state.json`, if the variable is set
+2. `./presets/<name>/state.json`, relative to your working directory
+3. `~/.foundry/presets/<name>/state.json`
+
+If no candidate exists, the node exits with an error listing every path it
+tried. `--preset` conflicts with `--load-state`, `--state`, and `--init`, since
+each defines the starting state. Snapshots are ordinary `--dump-state` output:
+anything you can build against a running node, you can ship as a preset
+(regenerate the bundled one with `presets/trading/generate.sh`). What the
+`trading` preset contains, and the addresses of its contracts, are documented
+in [`presets/trading/README.md`](../presets/trading/README.md) and
+[`presets/trading/addresses.json`](../presets/trading/addresses.json).
+
 Networks that already have the precompiles active, for testing against a remote
 chain:
 
@@ -138,6 +159,7 @@ chain:
 | `call to non-contract address 0x...` at a precompile | You are running stock `forge`, or Base is not enabled. Use `base-forge`, or set `base = true` / `FOUNDRY_BASE=true`. |
 | `FeatureNotActivated` against a live network | The precompile's feature is not activated on that chain yet. Local `base-anvil` seeds them active; on a network, use one where the feature is live. |
 | Behavior differs from the chain you expect | Your installed build may reproduce a different `base/base` commit than the chain you are comparing against. Check the release title / [`RELEASES.md`](../RELEASES.md) and re-install the matching version with `base-foundryup --install <ref>`. |
+| `no state file found for preset` | None of the three [resolution paths](#preset-snapshots) has a `state.json` for that preset name. Run from the repo root (where `presets/` lives), point `$BASE_ANVIL_PRESETS_DIR` at your presets directory, or regenerate with `presets/<name>/generate.sh`. |
 
 ## Next steps
 

@@ -37,7 +37,11 @@ base-foundryup
 
 This adds `base-foundryup` and the namespaced `base-forge`/`base-cast`/`base-anvil`/`base-chisel` commands, which enable Base precompiles by default.
 
+Beyond the precompiles, `base-anvil` adds persona presets — `base-anvil --preset trading` boots a local chain with a ready-made market (test tokens, seeded AMM pools, price feeds, funded accounts) — and fork aliases (`--fork-url base`, `--fork-url base-sepolia`) for testing against real Base state.
+
 - **Test your Base app with base-anvil:** [`docs/base.md`](./docs/base.md)
+- **Build a trading app locally:** [`docs/trading.md`](./docs/trading.md)
+- **Design rationale for the persona presets:** [`REASONING.md`](./REASONING.md)
 - **Release model and the `base/base` pin (maintainers):** [`RELEASES.md`](./RELEASES.md)
 
 Everything below is inherited from upstream Foundry and works unchanged; only the Base additions above are specific to this fork.
