@@ -57,28 +57,39 @@ Why snapshots instead of baking deployments into Rust:
   the same `.github/workflows/release.yml` flow described in `RELEASES.md`,
   so a preset is pinned to a build the same way the `base/base` rev is.
 
-## 2. B20 market in the trading preset
+## 2. Token choice in the trading preset: mock ERC-20s now, B20 later
 
-**What.** The trading preset seeds its tokens as B20 tokens created through
-the native token factory precompile at `0x8453...0000`, rather than deploying
-vanilla ERC-20 bytecode.
+**What.** The trading preset's tokens are plain `MockERC20` deployments (USDC
+with 6 decimals, WETH, cbBTC) created by the preset's deploy script with
+ordinary CREATE — they are **not** B20 tokens minted through the native token
+factory precompile. An earlier draft of this document claimed otherwise; that
+design was not implemented in phase 1.
 
-**Why.** "We support the precompiles" is a compatibility claim; "here is a
-working market built on them" is a product demo. A trading team that boots the
-preset and inspects the tokens sees Base-native primitives in use from the
-first block — the factory, B20 balances, the ActivationRegistry
-(`0x8453...0001`) already active — without reading a spec first. It also
-exercises the fork's core differentiator: stock anvil cannot produce this
-preset at all, because the factory call aborts with
-`call to non-contract address`.
+**Why.** Mock ERC-20s keep the preset consumable today by every wallet,
+indexer, and DEX-tooling library without B20 awareness, and keep the deploy
+script one dependency-free file. Seeding the tokens through the B20 factory
+at `0x8453...0000` remains the goal — it would make the preset a working demo
+of Base-native primitives and something stock anvil genuinely cannot
+regenerate — but it is follow-up work alongside the phase 3 items, with its
+own review.
 
-**How.** The preset's deploy script calls the factory precompile via the
-`base/base-std` interfaces (`IB20Factory`, `IB20` — see "Add the Base
-interfaces" in `docs/base.md`), then mints balances to the 10 dev accounts.
-Because base-anvil starts with activation-gated features already active
-(`docs/base.md`, "The local base-anvil node"), the script needs no
-`activate()` ceremony. The resulting B20 state serializes into
-`presets/trading/state.json` like any other account state.
+**How, and what is actually Base-specific today.** The deploy script
+(`presets/trading/script/DeployTradingPreset.s.sol`) deploys
+`MockERC20`/`MiniAMM`/`MockV3Aggregator`; nothing in the preset's contracts
+calls a precompile. The Base-specific parts of the shipped preset are
+subtler:
+
+- The snapshot is generated against a base-anvil node, so
+  `presets/trading/state.json` carries the ActivationRegistry's storage at
+  `0x8453...0001` (B20 asset, B20 stablecoin, and PolicyRegistry marked
+  active), matching a live Beryl-or-later chain.
+- `--preset` force-enables the Base precompiles (it implies `--base`), so
+  anything built on top of the preset can call them from block one.
+
+Loading the snapshot into stock anvil via `--load-state` does boot the mock
+market, but with no precompiles registered the activation state is inert and
+any precompile call aborts — base-anvil (or `--base`) is required for the
+full environment.
 
 ## 3. Fork-mode aliases (`--fork-url base`, `--fork-url base-sepolia`)
 
@@ -145,8 +156,11 @@ disconnected flags in `--help`.
 
 **How.** `docs/trading.md` mirrors the structure and tone of `docs/base.md`
 (install, run, verify, troubleshoot) and is linked from the README's
-Base-specific section. It doubles as the preset's acceptance test: the smoke
-suite (see Testing strategy) executes the same commands the tutorial shows.
+Base-specific section. The forge suite (see Testing strategy) covers the same
+flows the tutorial shows — balance checks, an exact-in swap, a feed read —
+but it does not execute the tutorial's literal `cast` commands; keeping the
+two in sync is a manual review step today, and scripting the tutorial's
+commands into CI is an open follow-up.
 
 ## 6. DEX choice: minimal AMM now, fork mode for the real thing
 
@@ -172,7 +186,7 @@ with real liquidity, which no local redeployment can match anyway.
 
 **How.** The AMM source lives with the preset's deploy script under
 `presets/trading/`, is deployed by that script, and its pools are seeded with
-the B20 tokens from item 2. `docs/trading.md` states plainly that the AMM is
+the mock ERC-20 tokens from item 2. `docs/trading.md` states plainly that the AMM is
 a mock for local iteration and points to fork mode for protocol-accurate
 testing.
 
@@ -202,5 +216,8 @@ release cadence without a protocol-style review.
   → path resolution across the three lookup locations, the
   `$BASE_ANVIL_PRESETS_DIR` override, alias → URL resolution including
   `base@<block>`, and the error message for an unknown preset name.
-- **Docs as tests.** The commands in `docs/trading.md` are the smoke test's
-  script; if the tutorial drifts from reality, CI fails.
+- **Docs/test sync.** The forge suite asserts the same flows the tutorial
+  walks through (funded balances, `swapExactIn`, a feed read), but the
+  tutorial's literal `cast` commands are not executed in CI yet — tutorial
+  drift is caught by review, not automation. Scripting the tutorial commands
+  into the smoke job is an open follow-up.

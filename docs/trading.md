@@ -35,14 +35,16 @@ The deployed addresses are listed in
 `$BASE_ANVIL_PRESETS_DIR/<name>/state.json`, then `./presets/<name>/state.json`
 relative to your working directory, then `~/.foundry/presets/<name>/state.json`.
 
-> Prefer the raw mechanism? `--preset trading` is exactly equivalent to:
+> Prefer the raw mechanism? Under the `base-anvil` wrapper (which passes
+> `--base` for you), `--preset trading` is equivalent to:
 >
 > ```bash
 > base-anvil --load-state presets/trading/state.json
 > ```
 >
-> which is what it runs under the hood. (`base-anvil` enables Base by
-> default; only a stock `anvil` build needs an explicit `--base` here.)
+> On a raw `anvil` binary, `--preset` additionally enables the Base
+> precompiles — the raw equivalent is
+> `anvil --base --load-state presets/trading/state.json`.
 
 ## Your first swap
 
@@ -70,13 +72,15 @@ Check the account's pre-funded USDC balance (6 decimals):
 base-cast call $USDC "balanceOf(address)(uint256)" $DEV0 --rpc-url $RPC
 ```
 
-Approve the AMM to spend 1,000 USDC, then swap 500 USDC for WETH:
+Approve the AMM to spend 1,000 USDC, then swap 500 USDC for WETH. The last
+argument is the minimum acceptable output (`minOut`); `0` is fine on a local
+chain where nothing front-runs you:
 
 ```bash
 base-cast send $USDC "approve(address,uint256)" $AMM 1000000000 \
   --private-key $DEV0_KEY --rpc-url $RPC
 
-base-cast send $AMM "swap(address,address,uint256)" $USDC $WETH 500000000 \
+base-cast send $AMM "swapExactIn(address,address,uint256,uint256)" $USDC $WETH 500000000 0 \
   --private-key $DEV0_KEY --rpc-url $RPC
 ```
 
@@ -123,7 +127,7 @@ interface IERC20 {
 }
 
 interface IMiniAMM {
-    function swap(address tokenIn, address tokenOut, uint256 amountIn)
+    function swapExactIn(address tokenIn, address tokenOut, uint256 amountIn, uint256 minOut)
         external
         returns (uint256 amountOut);
 }
@@ -147,7 +151,7 @@ contract TradingPresetTest is Test {
 
         vm.startPrank(DEV0);
         usdc.approve(address(amm), amountIn);
-        uint256 out = amm.swap(address(usdc), address(weth), amountIn);
+        uint256 out = amm.swapExactIn(address(usdc), address(weth), amountIn, 0);
         vm.stopPrank();
 
         assertGt(out, 0);
@@ -173,6 +177,12 @@ When mocks are not enough, fork a live network instead of loading the preset.
 base-anvil --fork-url base          # alias for https://mainnet.base.org
 base-anvil --fork-url base-sepolia  # alias for https://sepolia.base.org
 ```
+
+The aliases point at the public, rate-limited Base endpoints — fine for a
+first fork, not for sustained testing or CI. For real work, configure your
+own RPC provider in `foundry.toml` `[rpc_endpoints]`, which takes precedence
+over the built-in aliases; see
+[docs/base.md](./base.md#fork-url-aliases-and-your-own-rpc-endpoints).
 
 Your dev accounts have ETH on the fork but no tokens. Use the
 `anvil_dealERC20` RPC method to give any account any ERC-20 balance; it finds

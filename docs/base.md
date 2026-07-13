@@ -113,6 +113,28 @@ address over RPC only returns data if the node itself runs them (a `base-anvil`
 node, or a live Base RPC). In a pure local test, the precompiles live inside
 `base-forge`'s own in-process EVM.
 
+### Fork-url aliases and your own RPC endpoints
+
+The built-in `--fork-url base` / `base-sepolia` aliases exist so a first fork
+works with zero configuration — they resolve to the **public, rate-limited**
+Base endpoints, which are not suitable for sustained fork testing or CI. For
+real work, use Foundry's standard `[rpc_endpoints]` mechanism to point the
+same names at your own provider:
+
+```toml
+# foundry.toml
+[rpc_endpoints]
+base = "${BASE_RPC_URL}"                 # your RPC provider endpoint
+base-sepolia = "${BASE_SEPOLIA_RPC_URL}"
+```
+
+`rpc_endpoints` entries are resolved first and take precedence, so once
+configured, `base-anvil --fork-url base` transparently uses your endpoint and
+the built-in alias never fires. This is upstream Foundry behavior (env-var
+interpolation included) and works with stock `anvil` too; the built-in
+aliases only cover the case where no `foundry.toml` is in reach, such as a
+quickstart outside any project directory.
+
 ## The local base-anvil node
 
 A `base-anvil` node starts with Base's activation-gated features (such as B20
