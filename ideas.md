@@ -287,3 +287,141 @@ Still open:
     lookup to avoid parallel-test flakes.
 11. **Phase 2:** publish `presets/trading/` as a `forge init --template`
     target alongside the release-asset snapshot.
+
+---
+
+## Validation: the problem and solution are confirmed working (2026-07-13)
+
+The fixed tutorial and the preset were exercised end-to-end against this
+branch's own build (`target/debug/anvil`, which carries the `--preset` flag;
+the installed release binary does not yet):
+
+| Step | Command | Result |
+| --- | --- | --- |
+| Boot | `anvil --preset trading` | `Loaded preset 'trading' from presets/trading/state.json`; chain id 31337; 10 funded accounts |
+| Funded balance | `cast call $USDC "balanceOf(address)" $DEV0` | `1000000000000` (1,000,000 USDC, 6 decimals) |
+| Approve | tutorial command verbatim | status 1 (success) |
+| Swap | `cast send $AMM "swapExactIn(address,address,uint256,uint256)" $USDC $WETH 500000000 0` | status 1; `Swap` event; 500 USDC in, ~0.199 WETH out |
+| WETH received | `cast call $WETH "balanceOf(address)" $DEV0` | grew 1000 → ~1000.199 WETH |
+| Price feed | `cast call $ETH_USD_FEED "latestAnswer()"` | `250000000000` ($2,500.00, 8 decimals) |
+| Test suite | `forge test --fork-url <node>` in `presets/trading/` | **4/4 pass** on a fresh node |
+| Fork alias | `anvil --fork-url base` | `Resolved fork-url alias 'base' to https://mainnet.base.org` |
+
+One operational finding worth encoding in CI (open item 7): the test suite
+asserts the preset's *initial* state (exact balances, exact reserves).
+Running any state-mutating command before the suite makes
+`test_devAccountsFunded` and `test_poolsSeeded` fail — verified empirically.
+CI must boot a fresh node per suite run, and the tutorial flow must be
+scripted after (or on a separate node from) the assertions.
+
+---
+
+## Tech spec: presets — how to add one, and what they add to DX
+
+### Concept
+
+A preset is a **named, versioned chain-state snapshot plus the source that
+generates it**. It is not Rust code: the node ships one generic flag
+(`--preset <name>`), and each preset is a directory of Solidity, a deploy
+script, and a committed `state.json` produced by `--dump-state`. At startup
+`--preset <name>` resolves the snapshot and feeds it through the existing,
+upstream-tested `--load-state` machinery, with Base precompiles
+force-enabled (`enable_base()`), which matters on raw-binary invocations —
+Docker image, direct binary — where no wrapper passes `--base`.
+
+### Anatomy of a preset
+
+```
+presets/<name>/
+├── src/                  # the contracts the preset deploys (dependency-free)
+├── script/Deploy<X>.s.sol # forge script; fixed CREATE order (see below)
+├── test/<X>.t.sol        # asserts the *initial* snapshot state via fork
+├── generate.sh           # rebuilds state.json + addresses.json from source
+├── state.json            # committed --dump-state snapshot (the artifact)
+├── addresses.json        # name → address map extracted from the broadcast
+├── foundry.toml          # self-contained project config
+├── .gitignore            # broadcast/, cache/, out/ (build outputs)
+└── README.md             # what's inside, how to use and regenerate
+```
+
+### Adding a new preset (e.g. `payments`), step by step
+
+1. **Scaffold** `presets/payments/` with the layout above. Contracts should
+   be single-file and dependency-free where possible — every dependency is a
+   version surface the snapshot must track.
+2. **Write the deploy script** as a standard forge script. Keep the CREATE
+   transactions in a **fixed, documented order**: `generate.sh` maps
+   broadcast CREATEs to names positionally and sanity-checks each
+   `contractName`, so reordering deploys without updating the expected list
+   fails loudly instead of mislabeling addresses.
+3. **Copy and adapt `generate.sh`** (`presets/trading/generate.sh` is the
+   reference). It is idempotent and CI-safe by construction: fixed private
+   port, fail-fast if the port is taken (prevents deploying onto stale
+   state), clean-slate `rm` of prior artifacts, readiness polling, `jq`
+   extraction of `addresses.json` with name checks, and a graceful SIGINT
+   shutdown that triggers `--dump-state state.json`. Generation runs against
+   a **base-anvil** node so the snapshot carries the chain state a live
+   Beryl chain would have (e.g. ActivationRegistry storage at
+   `0x8453…0001`).
+4. **Commit `state.json` and `addresses.json`.** The snapshot is the
+   product; the Solidity is its auditable provenance. Reviewers diff both.
+5. **Write the test suite** against the snapshot's initial state: exact
+   funded balances, seeded reserves/config, one behavioral round-trip (the
+   trading preset does a real swap). The suite runs with
+   `forge test --fork-url <node>` against a freshly booted
+   `--preset <name>` node — fresh, because the assertions are
+   initial-state-exact (see Validation above).
+6. **Document it**: a preset README (contents, addresses, regeneration), and
+   a persona tutorial in `docs/<persona>.md` whose commands are the flows
+   the test suite asserts. No `--help`-only features.
+7. **No Rust changes.** The resolver is generic; a new directory under
+   `presets/` is immediately bootable with `--preset <name>`.
+
+### Runtime resolution (already shipped)
+
+`--preset <name>` resolves `state.json` in order from
+`$BASE_ANVIL_PRESETS_DIR/<name>/`, `./presets/<name>/`, then
+`~/.foundry/presets/<name>/`; conflicts with `--init`/`--state`/
+`--load-state`; a miss errors with every path tried plus a regeneration
+hint. The third path is the hook for phase-2 distribution: release CI
+regenerates snapshots when the `base/base` pin moves, ships them as release
+assets, and `base-foundryup` installs them into `~/.foundry/presets/` — at
+which point `--preset` stops being repo-checkout sugar and becomes the
+install-and-run story.
+
+### CI requirements per preset (open — action item 7)
+
+- Boot `--preset <name>` on a fresh node, run the preset suite (4 tests for
+  trading), per platform — mirroring the existing precompile smoke job.
+- Script the tutorial's literal `cast` commands against a second fresh node,
+  so docs drift fails CI instead of review.
+- Regenerate the snapshot when `base/base` moves and diff against the
+  committed one to catch staleness.
+
+### What presets add to developer experience
+
+- **Time-to-first-interaction drops from ~1–2 hours to under a minute.** The
+  validated flow above — funded balances, an approved and executed swap, a
+  price read — took five copy-paste commands against one booted node. Cold
+  scaffolding the same market (mock tokens with correct decimals, an AMM
+  with seeded liquidity, feeds) is the 1–2 hour chore both review passes
+  agreed is real.
+- **A stable, versioned target for content.** Deterministic addresses
+  (committed `addresses.json`) mean tutorials, workshops, videos, and
+  example repos can hard-reference contracts and never drift — the preset is
+  pinned to a build the same way the `base/base` rev is.
+- **Realistic events from block one.** Indexers, charting UIs, and bots
+  under development get ERC-20 `Transfer`s, AMM `Swap`s, and feed reads to
+  consume immediately — no waiting on a team's own contracts to exist.
+- **An honest on-ramp to the real thing.** The tutorial's arc — preset for
+  iteration, `--fork-url base` (+ `anvil_dealERC20`) for real liquidity — is
+  the actual evaluation path a trading team follows, with the mock market
+  clearly labeled as a mock.
+- **A namespace that scales.** New personas (`payments`, `nft`) are a
+  directory and a snapshot each — no node changes, one discoverable flag,
+  and (post phase 2) one installer.
+
+Scope honesty, carried over from the review: today's value is concentrated
+in the *artifact*; the flag is ergonomics plus raw-binary Base-enablement,
+and the distribution story lands with phase 2. The market is static until
+the phase-3 simulation RPCs (`base_setOraclePrice`, traffic generation).
