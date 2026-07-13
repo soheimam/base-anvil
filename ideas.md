@@ -2,9 +2,10 @@
 
 A senior-DevRel review of the changes on this branch, produced by a two-model
 adversarial process: **Claude Opus** wrote the initial findings against the
-repo, **Claude Sonnet** then attacked every claim (verifying each against the
-code), and the reconciled findings record what survived both passes. Each
-factual claim in the reconciled section was independently spot-checked.
+repo, **Claude Fable** then attacked every claim (verifying each against the
+code — for the doc claims, against the pre-fix revision `6dc5d19f7` that the
+writer reviewed), and the reconciled findings record what survived both
+passes.
 
 The three questions under review:
 
@@ -33,7 +34,7 @@ area; the genuine value is the preset artifact, not the flags.**
 2. The aliased endpoints are the public rate-limited RPCs — exactly what the
    "serious DEX teams fork mainnet" persona (REASONING.md §3) should *not* be
    using for real fork testing.
-3. `--preset` is thin sugar over `--load-state`; `docs/trading.md:38` says
+3. `--preset` is thin sugar over `--load-state`; `docs/trading.md:38` said
    "exactly equivalent" itself. It adds three-path resolution and
    `enable_base()`, which is a no-op on a base-anvil build. Net gain: not
    typing a path — ~90 lines of resolver, clap conflict matrix, and tests to
@@ -53,7 +54,7 @@ area; the genuine value is the preset artifact, not the flags.**
 - *"Hunting for an RPC URL before the first command"* — marginal; the URLs
   are already tabulated in `docs/base.md`. Solvable with a docs one-liner or
   `[rpc_endpoints]`.
-- **The rationale contradicts the shipped code.** REASONING.md §2 claims the
+- **The rationale contradicts the shipped code.** REASONING.md §2 claimed the
   preset seeds tokens "through the native token factory precompile at
   `0x8453...0000`" and that "stock anvil cannot produce this preset at all."
   The shipped code deploys `new MockERC20(...)`
@@ -61,7 +62,7 @@ area; the genuine value is the preset artifact, not the flags.**
   no precompile call, no `base-std` import exists anywhere in the preset.
   The single strongest justification for why this preset needs base-anvil is
   not true of what shipped.
-- **The flagship tutorial command is broken.** `docs/trading.md:79` calls
+- **The flagship tutorial command was broken.** `docs/trading.md:79` called
   `swap(address,address,uint256)`; `MiniAMM.sol:56` only exposes
   `swapExactIn(address,address,uint256,uint256)`. The copy-paste "first swap"
   reverts, falsifying REASONING.md §5's "every step that isn't copy-pasteable
@@ -85,75 +86,115 @@ preset requires base-anvil at all."
 
 ---
 
-## Adversarial review (critic: Claude Sonnet)
+## Adversarial review (critic: Claude Fable)
 
 **Refuted:**
 
-- *"`enable_base()` is a no-op on a base-anvil build."* Wrong framing.
-  `base-anvil` is a shell wrapper that appends `--base` to the raw binary
-  (`foundryup/foundryup:588`); the raw `anvil` binary defaults to
-  `base: false` (`crates/evm/networks/src/lib.rs`) with chain-id 31337, so
-  the chain-id auto-enable never fires. Anyone invoking the raw binary (CI,
-  direct install) gets no Base precompiles without `--base` — there,
-  `--preset`'s `enable_base()` is essential, and `docs/base.md:130` documents
-  exactly this ("even on a stock anvil build").
-- *"The preset would run identically on stock anvil."* False as stated.
-  `state.json` contains the ActivationRegistry at
-  `0x8453000000000000000000000000000000000001` with 3 activation storage
-  slots — Base-specific state written by the base-anvil node at generation
-  time. The current preset contracts never call it, so today's tutorial flow
-  happens to work on stock anvil, but the state is not Base-agnostic and any
-  future step touching the registry breaks.
-- *"rpc_endpoints strictly dominates the alias table."* Circular.
-  `resolve_rpc_alias` needs a `foundry.toml` (project or global) with the
-  entry present; a new user running `anvil --fork-url base` outside any
-  Foundry project — the exact quickstart persona — gets nothing from it. The
-  hardcoded table fires precisely in that no-config case. The two mechanisms
-  serve different scenarios; "replace" should be "complement".
-- *Fabricated citation:* the "exactly equivalent" wording appears only in
-  `docs/trading.md:38`, not also in `presets/trading/README.md:42-48` as the
-  writer claimed (the README shows `--load-state` as a raw alternative).
+- *"`enable_base()` is a no-op on a base-anvil build; stock anvil is not the
+  shipping target."* The premise about the wrapper is right, the conclusion
+  false. `base-anvil` is not a build — it is a generated shell wrapper that
+  execs the raw binary with `--base` appended (`foundryup/foundryup:585-593`).
+  The raw binary defaults to `base: false`
+  (`crates/evm/networks/src/lib.rs:83`); `FOUNDRY_BASE` is never read by any
+  Rust code, and chain-id auto-enable never fires on the default 31337. Raw
+  binaries *are* shipped: the Dockerfile image contains raw `anvil` (no
+  wrapper) and the real binary sits unwrapped in `$FOUNDRY_VERSION_DIR`. On
+  those paths, `--preset` without `enable_base()` would load the market but
+  silently omit the precompiles. `enable_base()` is load-bearing.
+- *Fabricated citation:* the "exactly equivalent" wording never appeared in
+  `presets/trading/README.md:42-48` as the writer claimed (that section shows
+  `--load-state` as a raw alternative; neither "equivalent" nor "preset"
+  appears in the file). The substance survives via `docs/trading.md:38` and
+  an uncited `docs/base.md:129-130`, but the README citation is invented.
+- *"rpc_endpoints strictly dominates the alias table."* Not strictly:
+  `resolve_rpc_alias` requires a `foundry.toml` (project or global) or mesc
+  config with the entry present (`crates/config/src/lib.rs:1492-1506`). A
+  first-run user in an empty directory — precisely the quickstart persona —
+  gets nothing from it; the hardcoded table fires exactly in that zero-config
+  case. "Complement", not "dominates".
+- *"The RPC URLs are already tabulated in docs/base.md."* Wrong tree: before
+  this branch, the docs table listed only Base Sepolia and Vibenet —
+  `https://mainnet.base.org` appeared nowhere. The writer cited the branch's
+  own addition as evidence the problem was pre-solved.
 
 **Weakened:**
 
-- The rate-limited-RPC complaint dismisses a quickstart convenience by
-  production standards; defaults being unsuitable for production is normal
-  for dev tooling.
-- "`--load-state` delivers 100% of the value" is true for the preset *as
-  shipped* but overextends — if the B20 design ever lands, the snapshot stops
-  being reproducible on stock anvil.
-- The writer undersold `--preset`'s phase-2 install story: the
-  `~/.foundry/presets/` resolution path is what lets `base-foundryup` install
-  artifacts so `base-anvil --preset trading` works with no repo checkout —
-  not replicable by `--load-state` without a typed path or wrapper. Plus
-  `--help` discoverability and a namespace for future presets
-  (payments, nft).
+- *"The preset would run identically on stock anvil."* Operationally true for
+  every shipped flow (no preset contract calls a precompile), but
+  `state.json` carries the ActivationRegistry at
+  `0x8453000000000000000000000000000000000001` with 3 activation slots set —
+  Base-specific state, inert today. "Nothing requires base-anvil at all" is
+  too absolute; any future preset step touching the registry breaks on stock
+  anvil.
+- *"`--preset` is vanity keystroke savings."* Understated three ways: the
+  raw-binary `enable_base()` (above), the genuinely good missing-preset error
+  (lists every candidate path plus a generation hint), and the
+  `~/.foundry/presets/` leg that is the hook for the phase-2 install story.
+  Counterweight that keeps it half-alive: phase 2 is unimplemented — nothing
+  installs to `~/.foundry/presets/` today, so the flag is sugar now and a
+  distribution mechanism only on promise.
+- *"Rate-limited public RPCs, wrong for the serious persona."* Unverifiable
+  from the repo and holds dev-tool defaults to production standards; the
+  surviving kernel is that docs must position `rpc_endpoints` as the serious
+  path.
 
 **Survived (attacked and confirmed):**
 
-- REASONING.md §2 is false against the shipped code — exhaustive grep of
-  `presets/trading/` for `B20`/`IB20`/`0x8453`/`factory`/`base-std` finds
-  nothing in any Solidity source. Strongest finding in the review.
-- The swap bug is real and *broader* than reported: not just the cast command
-  at `docs/trading.md:79`, but the embedded Solidity snippet at lines 126 and
-  150 also defines and calls the nonexistent 3-arg `swap`. All would revert.
-- REASONING.md §5's "the smoke suite executes the same commands the tutorial
-  shows" is also false: `TradingPreset.t.sol` reads `addresses.json` via
-  `vm.readFile` and calls `swapExactIn`; the tutorial uses env-var exports
-  and cast with the wrong signature. CI cannot catch tutorial drift.
-- The artifact's value being independent of the `--preset` flag: survives.
+- REASONING.md §2 (as of `6dc5d19f7`) was false against the shipped code —
+  exhaustive grep of `presets/trading/` for
+  `B20|IB20|precompile|0x8453|base-std|factory` finds nothing in any source.
+  Strongest finding; since fixed on the branch.
+- The tutorial swap was broken, and *worse than the writer said*: the
+  nonexistent 3-arg `swap` appeared at `docs/trading.md:79`, `:126`, and
+  `:150`. Since fixed.
+- "Docs as tests" was doubly false: `TradingPreset.t.sol` never executes the
+  tutorial's commands (it reads `addresses.json` via `vm.readFile` and calls
+  `swapExactIn`), **and no CI workflow runs the preset test at all** —
+  `grep -rn "preset" .github/workflows/` comes back empty. REASONING §5's
+  "CI boots `base-anvil --preset trading`" was aspirational fiction.
+- Alias precedence mechanics exactly as described: within a configured
+  project the hardcoded table is dead code.
+- All other spot-checked citations accurate.
 
-**Net:** the writer's harshest conclusion ("nothing requires base-anvil")
-fails on the ActivationRegistry state and the raw-binary `enable_base()`
-path. Its strongest claims — the §2 fiction and the broken tutorial — are
-fully confirmed and are pre-merge blockers.
+**New findings the writer missed:**
+
+1. **Silent misconfiguration mask in the alias resolver.** If
+   `rpc_endpoints` has `base = "${BASE_RPC_URL}"` with the env var unset,
+   `resolve_rpc_alias`'s `let Some(Ok(url))` falls through and the hardcoded
+   table silently rewrites `base` to the public RPC. Upstream would fail
+   loudly; the branch sends a misconfigured user to the rate-limited public
+   endpoint with only a printed line.
+2. **Docs/error-string drift:** the troubleshooting table quoted the error as
+   `preset not found: trading`; the actual error is
+   ``no state file found for preset `trading` ``. Survived the first fix
+   commit.
+3. **Test hygiene:** `can_resolve_preset_state_via_env_dir` mutates the
+   process-global `BASE_ANVIL_PRESETS_DIR` via `unsafe { env::set_var }` in a
+   default-parallel test harness — a flake risk.
+4. **No `--preset`/`--fork-url` conflict declared:** the combination is
+   accepted, loading preset state onto a fork while activation seeding is
+   skipped in fork mode (`backend/mem/mod.rs:448-467`) — an undefined,
+   unreviewed pairing.
+5. **Library-consumption gap:** `resolve_rpc_alias` runs only in the binary
+   entrypoint; embedded `NodeArgs` consumers get only the hardcoded table —
+   which is actually a fair point *for* the branch's "covers every
+   consumption path" claim.
+6. Steelman items skipped by the writer: `--help` discoverability, the
+   polished missing-preset error, `generate.sh` being solid engineering
+   (idempotent, port-collision fail-fast, address sanity checks), and
+   `--preset` as the namespace that makes phase-2 artifact installation and
+   future presets coherent.
+
+**Net:** the writer's two strongest findings (§2 fiction, broken tutorial)
+fully hold and were pre-merge blockers; its harshest conclusions ("nothing
+requires base-anvil", "drop `--preset`", "aliases strictly dominated") all
+fail on code evidence.
 
 ---
 
 ## Reconciled findings
 
-*(what survives both passes; every claim here was spot-checked against the
-repo by a third model, Claude Fable)*
+*(what survives both passes; contested facts spot-checked against the repo)*
 
 ### Q1 — Do the changes add anything to normal anvil DX?
 
@@ -161,44 +202,39 @@ repo by a third model, Claude Fable)*
 
 - `presets/trading/` (mocks, MiniAMM, feeds, deploy script, committed
   `state.json`, tests) is the genuine contribution: it converts a 1–2 hour
-  scaffolding chore into one command. Both models agree on this.
-- `--preset` is *modest but defensible* ergonomics — not the "pure vanity"
-  of the initial review. Its real earners are: `--help` discoverability, the
-  `~/.foundry/presets/` path that makes the phase-2 `base-foundryup` install
-  story work without a repo checkout, force-enabling Base on raw-binary
-  invocations (the `base-anvil` command is just a wrapper adding `--base`),
-  and a clear missing-preset error. Its cost is ~90 lines of resolver +
-  conflict matrix + tests. Verdict: keep, but market it as convenience, not
-  capability.
-- `--fork-url base`/`base-sepolia` is the weakest piece. It duplicates
-  `[rpc_endpoints]` *inside* a Foundry project but is the only thing that
-  works in the bare no-project quickstart. Verdict: keepable at ~50 lines,
-  but the docs must present `[rpc_endpoints]` as the real/production path and
-  the alias as quickstart sugar over rate-limited public endpoints.
+  scaffolding chore into one command. Both models agree.
+- `--preset` is *modest but defensible* ergonomics — not vanity. Its real
+  earners: `--help` discoverability, the `~/.foundry/presets/` path that the
+  phase-2 `base-foundryup` install story needs, force-enabling Base on
+  raw-binary invocations (Docker image, direct binary — the `base-anvil`
+  command is just a wrapper adding `--base`), and a clear missing-preset
+  error. Honest framing: sugar today, distribution mechanism when phase 2
+  ships. Verdict: keep; market as convenience, not capability.
+- `--fork-url base`/`base-sepolia` is the weakest piece. Inside a configured
+  project it is dead code; its only constituency is the zero-config first
+  run. Keepable, but two conditions: docs present `[rpc_endpoints]` as the
+  production path (done), and the silent env-var fallthrough (new finding #1)
+  gets fixed so a misconfigured alias errors instead of silently hitting the
+  public endpoint.
 
 ### Q2 — Are the problems real, and could they be solved without these changes?
 
 - **Scaffolding a mock market: real, overstated.** The chore exists; the
-  "short L2 evaluation window" framing is unfalsifiable and should be dropped
-  from any external messaging. ~90% of the solution needs no anvil code:
-  ship the snapshot + deploy source and document `--load-state`. The Rust
-  changes buy distribution/discoverability, not capability.
-- **RPC URL friction: marginal.** Already solved by a docs table and
-  `[rpc_endpoints]` for anyone inside a project; the alias only helps the
-  zero-config first run.
-- **Two claims in this branch's own rationale are false and must be fixed
-  before anyone defends it externally:**
-  1. REASONING.md §2 — the B20-factory token story was never implemented;
-     the preset ships vanilla `MockERC20`. Either implement B20 seeding
-     (which would make the "needs base-anvil" argument genuinely true) or
-     delete/rewrite §2. Note the honest version of the differentiation
-     argument: the snapshot *does* carry Base-specific ActivationRegistry
-     state, and `--preset` *does* matter on raw binaries — subtler, but real.
-  2. REASONING.md §5 "docs as tests" — the smoke tests do not run the
-     tutorial's commands, and the tutorial's flagship swap is broken at
-     `docs/trading.md:79`, `:126`, and `:150` (`swap(...)` does not exist;
-     the contract has `swapExactIn(...)`). Fix the three call sites and
-     either wire the tutorial commands into CI or stop claiming they are.
+  "short L2 evaluation window" framing is unfalsifiable and should stay out
+  of external messaging. ~90% of the solution needs no anvil code (snapshot +
+  `--load-state`); the Rust changes buy distribution and discoverability,
+  plus Base-enablement on raw binaries.
+- **RPC URL friction: real but small — and this branch is what documented the
+  mainnet URL.** The adversary showed the pre-branch docs never listed
+  `https://mainnet.base.org`; the alias and its docs row are what closed
+  that gap. A docs table alone would have closed most of it.
+- **Two claims in the branch's own rationale were false and have been fixed
+  on this branch (`9b2d6eeda`):** REASONING.md §2's B20-factory story
+  (rewritten to describe the real, subtler differentiation: ActivationRegistry
+  state in the snapshot, `--preset` implying `--base`), and §5's
+  docs-as-tests claim (corrected; the tutorial's three broken `swap` call
+  sites were also fixed). Still open from the same cluster: no CI workflow
+  runs the preset test at all.
 
 ### Q3 — Options other than option-passing to anvil
 
@@ -209,29 +245,45 @@ Ranked by reconciled value:
 2. **Template repo (`forge init --template`)** — strong complement;
    `presets/trading/` is already 80% of one. Editable source suits the
    Foundry-fluent persona better than a frozen snapshot.
-3. **Documented `[rpc_endpoints]` snippet** — add regardless of the alias's
-   fate; it is the correct answer for anyone with a private RPC.
-4. **Wrapper script / justfile** — proves how little the flag does, useful
-   as an internal argument; not worth shipping alongside the flag.
-5. **Docker image** — revisit at phase 2/3 for the indexer/frontend persona
-   who has no Foundry toolchain; medium maintenance, not needed now.
+3. **Documented `[rpc_endpoints]` snippet** — added to `docs/base.md`; the
+   correct answer for anyone with a private RPC.
+4. **Wrapper script / justfile** — proves how little the flag does; useful
+   internally, not worth shipping alongside the flag.
+5. **Docker image** — revisit at phase 2/3 for the indexer/frontend persona;
+   note the published image ships the *raw* binary, which is precisely where
+   `--preset`'s `enable_base()` matters.
 6. **npx/cargo scaffolder** — rejected by both models; unjustified
    maintenance at this scale.
 
-### Action items (pre-merge blockers first)
+### Action items
 
-1. Fix `docs/trading.md:79`, `:126`, `:150` — `swap` → `swapExactIn` with a
-   `minOut` argument.
-2. Rewrite or delete REASONING.md §2 (B20 claim vs shipped `MockERC20`);
-   replace with the honest, subtler differentiation (ActivationRegistry
-   state, raw-binary `enable_base()`).
-3. Correct REASONING.md §5: either wire tutorial commands into CI or remove
-   the "docs as tests" claim.
-4. Soften `docs/trading.md:38`'s "exactly equivalent": equivalent under the
-   `base-anvil` wrapper; on a raw `anvil` binary `--preset` additionally
-   enables Base.
-5. Add the `[rpc_endpoints]` snippet to `docs/base.md` as the recommended
-   path for real RPC endpoints; position the built-in alias as zero-config
-   quickstart sugar.
-6. Consider publishing `presets/trading/` as a `forge init --template`
-   target in phase 2, alongside the release-asset snapshot.
+Fixed on this branch (`9b2d6eeda` and after):
+
+1. ~~`docs/trading.md` swap signature~~ — all three call sites now use
+   `swapExactIn(...)` with a `minOut` argument.
+2. ~~REASONING.md §2~~ — rewritten to match the shipped code and state the
+   honest differentiation.
+3. ~~REASONING.md §5 "docs as tests"~~ — corrected to "docs/test sync",
+   CI wiring flagged as follow-up.
+4. ~~`docs/trading.md` "exactly equivalent"~~ — now wrapper-scoped with the
+   raw-binary equivalent spelled out.
+5. ~~`[rpc_endpoints]` guidance~~ — added to `docs/base.md`; tutorial links
+   to it.
+6. ~~Troubleshooting error string~~ — now quotes the real
+   ``no state file found for preset`` error.
+
+Still open:
+
+7. **Wire `TradingPreset.t.sol` into CI** — no workflow currently boots the
+   preset or runs its tests; REASONING's testing strategy depends on it.
+8. **Fix the alias env-var fallthrough** — an unresolvable `rpc_endpoints`
+   entry (e.g. unset `${BASE_RPC_URL}`) should error loudly, not silently
+   fall through to the hardcoded public endpoint.
+9. **Declare or define `--preset` × `--fork-url`** — either add a clap
+   conflict or specify the semantics; today the combination is accepted and
+   unreviewed (activation seeding is skipped in fork mode).
+10. **Test hygiene** — replace the `unsafe { env::set_var }` in
+    `can_resolve_preset_state_via_env_dir` with a serialized or injected
+    lookup to avoid parallel-test flakes.
+11. **Phase 2:** publish `presets/trading/` as a `forge init --template`
+    target alongside the release-asset snapshot.

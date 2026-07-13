@@ -204,7 +204,7 @@ liquidity, without spending real funds.
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `preset not found: trading` | The snapshot is not on the resolution path. `--preset <name>` checks `$BASE_ANVIL_PRESETS_DIR/<name>/state.json`, then `./presets/<name>/state.json`, then `~/.foundry/presets/<name>/state.json`. Run from the repo root, set `BASE_ANVIL_PRESETS_DIR`, or copy the preset into `~/.foundry/presets/`. |
+| ``no state file found for preset `trading` `` | The snapshot is not on the resolution path. `--preset <name>` checks `$BASE_ANVIL_PRESETS_DIR/<name>/state.json`, then `./presets/<name>/state.json`, then `~/.foundry/presets/<name>/state.json`. Run from the repo root, set `BASE_ANVIL_PRESETS_DIR`, or copy the preset into `~/.foundry/presets/`. |
 | Addresses in `addresses.json` do not match what is on chain | The snapshot and the address list are out of sync. Regenerate both with `presets/trading/generate.sh`. |
 | Swap or feed calls revert / return empty on a fork | You forked a network where the mock contracts do not exist; the preset contracts only exist under `--preset trading` / `--load-state`. On forks, use the real deployed contracts (and `anvil_dealERC20` for balances). |
 | `call to non-contract address 0x...` at a precompile | Base is not enabled on the node. `base-anvil` and `--preset` enable it; if you invoke a raw `anvil` build, add `--base`. See [docs/base.md](./base.md#troubleshooting). |
